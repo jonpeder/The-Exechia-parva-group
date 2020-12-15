@@ -1,0 +1,143 @@
+---
+title: "Parva group CO1 tree"
+author: "Jon Peder Lindemann"
+date: "12/14/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Sequence analysis
+Download sequence data from BOLD Systems.
+```{r include=FALSE}
+require(bold) # load bold systems package
+ingr <- bold_seq(container = "DS-REPGR") # Download barcode sequence data for ingroup taxa from DS-REPGR project
+outgr <- bold_seq(ids = c("GMGRG1328-13", "SSWLD1854-13", "SSBAE2265-13", "GMNWP427-14", "GMGRF3113-13", "NOMYC475-13")) # Download barcode sequence data for outgroup taxa # E. cornuta, E. separata, E. cincta, E. fusca, Exechiopsis subulata, Allodia lugens
+co1 <- c(ingr[], outgr[]) # Combine lists
+# Paste seqences as flat fasta file
+co1_fas <- ""
+for (i in 1:length(co1)) {
+  co1_fas <- paste(co1_fas,"\n", ">", co1[[i]][1], "\n", co1[[i]][4], sep = "")
+}
+write(co1_fas, file = "parvagr.fas")
+```
+
+Multiple alignment
+```{bash}
+# MAFFT v7.310 with "linsi" settings
+mafft --maxiterate 1000 --localpair parvagr.fas > parvagr.linsi.fas
+```
+
+Trim ends
+```{r}
+require(ips)
+parvagr.linsi <- as.matrix(read.FASTA("parvagr.linsi.fas"))
+parvagr.trim <- trimEnds(parvagr.linsi)
+parvagr.trim <- as.list(parvagr.trim)
+write.FASTA(parvagr.trim, file = "parvagr.linsi.trim.fas")
+```
+
+### Sequence Analysis with BEAST v.2.5.1
+Use beauty v.2.5.1 to create BEAST input xml-file.
+Settings: Subst.model = HKY and frequencies estimated, Yule tree-model, Strict clock.
+Run two chains for 10000000 MCMC generations, sampling trees every 5000 gen.
+
+Combime chains in LogCombiner with 10% burnin for each chain 
+Create Maximum clade credibility tree in tree annotator v.2.5.1
+```{bash}
+# Use tree annotator to create maximum clade credibility tree
+logcombiner -log beast_run/run1/parvagr.trees  -log beast_run/run2/parvagr.trees -o parvagr.trees
+treeannotator -burnin 0 parvagr.trees parvagr.tree
+```
+
+## Tree visualization
+Import tree file to R
+```{r}
+library(rBt)
+read.annot.beast("parvagr.tree") -> parvagr # Import nexus tree-file including annotated data. Most importantly the Posterior node support.
+```
+
+Exclude node support lower than 0.9
+```{r}
+parvagr$metadata$posterior <- as.numeric(parvagr$metadata$posterior) # Convert Posterior data to from character to numeric 
+parvagr$metadata$posterior90 <- parvagr$metadata$posterior
+parvagr$metadata$posterior90[parvagr$metadata$posterior < 0.9] = NA # exclude values lower than 0.9
+```
+
+Get maching process IDs from BOLD. Change tiplabels. 
+```{r}
+library(bold)
+specimens <- bold_specimens(ids = parvagr$tip.label) # Get process-id/sample-id associations
+parvagr$tip.label <- specimens$sampleid[match(parvagr$tip.label, specimens$processid)] # Change tiplabels from process-IDs to sample-IDs
+```
+
+Load species-names-region data. Exclude individuals not present in tree.
+```{r}
+library(geiger)
+importData <- read.delim(file = "../species_names_region.csv", sep = ";") # Import data from CSV file
+parvaData <- data.frame(row.names = importData[,3], importData[,c(1:2)]) # Use sample-IDs as row names
+name.check(parvagr, parvaData) # Use name.check from "geiger" to check wheter names in the tree and the dataset correspond
+parvaDataExc <- parvaData[! rownames(parvaData) %in% name.check(parvagr, parvaData)$data_not_tree,] # Remove taxa from dataset that are not represented in the tree
+name.check(parvagr, parvaDataExc) # name.check again
+```
+
+Associate species-data with nodes
+```{r}
+require(ggtree)
+# Find unique species names
+clades <- unique(parvaDataExc$Species)
+# Parse through list of unique taxa names and get the MRCA for each
+clab <- data.frame(Label=NA, Node=NA)
+for(i in 1:length(clades)){
+  temp1 <- rownames(parvaDataExc[parvaDataExc$Species == clades[[i]],]) # Find sample IDs of taxa to be excluded
+  clab[i,] <- c(clades[i], MRCA(parvagr, temp1))
+}
+clab$Node <- as.numeric(clab$Node)
+```
+
+Associate geographic data with nodes
+```{r}
+source("ancestor_traits.R") # Load function
+regions <- ancestor_traits(parvagr, parvaDataExc$Region_1, rownames(parvaDataExc)) # Find MRCA-nodes of taxa sharing the same region
+colnames(regions) <- c("node", "Region")
+# Rename regions
+regions$Region[regions$Region == "North_America"] = "Nearctic"
+regions$Region[regions$Region == "Europe"] = "West Palearctic"
+regions$Region[regions$Region == "Japan"] = "East Palearctic"
+regions$Region[regions$Region == "Africa"] = "Afrotropical"
+# Exclude empty region-fields
+regions <- regions[regions$Region != "",]
+```
+
+Plot the tree
+```{r}
+require(ggtree)
+require(ggplot2)
+parvagr <- groupClade(parvagr, .node=c(131, 134)) # Group outgroup and ingroup (Ingroup = node #134)
+# Plot tree with tip labels, node labels and coloured branches according to outgroup/ingroup
+p <- ggtree(parvagr, ladderize = TRUE, right = TRUE, size = 0.4) +  xlim(0, 0.105) +
+  geom_text2(aes(subset=!isTip, label=round(parvagr$metadata$posterior90, 1)), size = 2.8, hjust=1.5, vjust=1.4) +
+  geom_treescale(width = 0.01, fontsize=6, linesize=1.2, offset=1) +
+  (aes(color = group)) + # Add colour to outgroup and ingroup line
+  geom_tiplab(size = 1.5) + # Add background color to tipl abels
+  scale_color_manual(values=c("grey", "black")) + # Assign color values to outgroup/ingroup
+  guides(col = FALSE) # Remove color legend
+
+# Plot colour fill according to regions
+p <- p + geom_hilight(data=regions, aes(node=node, fill=Region), alpha=0.4) + scale_fill_manual(values=c("darkolivegreen3", "violetred2", "cadetblue1", "darkorange")) + theme(legend.position=c(.15, .7), legend.title = element_text(size = 22), legend.text = element_text(size = 19))
+
+# Plot species names as clade-labels
+for(j in 1:nrow(clab)){
+  #Then add each clade label using a for-loop
+  p <- p + geom_cladelabel(node=clab$Node[j], label=clab$Label[j], offset = 0.0038, align = TRUE, barsize = 0.7, extend = 0.14, fontface = 'italic', fontsize = 3.6)
+}
+
+# Print plot to PDF
+pdf(file = "co1.tree.pdf", width = 12, height = 13)
+p # plot tree
+dev.off()
+```

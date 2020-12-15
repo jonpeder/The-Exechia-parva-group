@@ -1,0 +1,81 @@
+---
+title: "Genetic_dstances"
+author: "Jon Peder Lindemann"
+date: "8 10 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import data
+```{r}
+require(bold)
+importData <- read.delim(file = "../species_names_region.csv", sep = ";") # Import data from CSV file
+parvaData2 <- importData[,c(1:3)]
+specimens <- bold_specimens(container = "DS-REPGR") # Get process-id/sample-id associations
+parvaData <- data.frame(Species = parvaData2$Species[match(specimens$sampleid, parvaData2$Sample.ID)], processid = specimens$processid) # Exclude taxa not present in BOLD-dataset
+parvagr <- bold_seq(container = "DS-REPGR") # Get sequences from BOLD-dataset
+```
+
+# Convert to fasta format
+```{r}
+# The BOLD sequence-data list is organized as follows
+parvagr[[1]][1] # ID
+parvagr[[1]][2] # Name
+parvagr[[1]][4] # Sequence
+
+# loop over list of sequences and change names based on matching process IDs from name-list
+for (i in 1:length(parvagr)) {
+  parvagr[[i]][2] <- parvaData$Species[match(parvagr[[i]][1], parvaData$processid)]
+}
+# Create flat fasta file
+parva_fas = ""
+for (i in 1:length(parvagr)) {
+  parva_fas <- paste(parva_fas, "\n", "> ", parvagr[[i]][2], "\n", parvagr[[i]][4], sep = "")
+}
+write(parva_fas, file = "parvagr.fas")
+```
+
+# Alignment
+```{bash}
+# MAFFT v7.310 with linsi "settings"
+mafft --maxiterate 1000 --localpair parvagr.fas > parvagr.linsi.fas
+```
+
+# Trim ends
+```{r}
+require(ips)
+require(ape)
+# Read fasta file to ape numeric format
+parvaseq <- as.matrix(read.FASTA(file = "parvagr.linsi.fas"))
+# Trim ends 
+parvaseq_trim <- trimEnds(parvaseq)
+parvaseq_trim <- as.list(parvaseq_trim)
+```
+
+# Intraspecific distances
+```{r}
+require(ape)
+temp1 <- data.frame("species" = "", "mean.dist" = "")
+# Iterate over each unique species name in dataset. 
+for (i in 1:length(unique(names(parvaseq_trim)))) {
+  withinsp <- dist.dna(parvaseq_trim[labels(parvaseq_trim) == unique(names(parvaseq_trim))[i]], model = "F81") # Calculate pairwise distances for each species
+  temp1[i,] <- data.frame(unique(names(parvaseq_trim))[i], mean(withinsp)) # Add mean pairwise distance and species name to new dataframe
+}
+temp1
+wmeandist <- data.frame("mean.dist" = temp1$mean.dist, row.names = temp1$species) # Add species names as rownames
+write.csv(wmeandist, file = "intra.dist", quote = FALSE)
+```
+
+# Interspecific distances
+```{r}
+require(vegan)
+betweensp <- dist.dna(parvaseq_trim, model = "F81", pairwise.deletion = TRUE)
+betweensp_mean <- meandist(betweensp, names(parvaseq_trim))
+write.csv(round(betweensp_mean, digits = 3), file = "inter.dist")
+```
+
