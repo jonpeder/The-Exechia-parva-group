@@ -1,2 +1,2 @@
 # The-Exechia-parva-group
-Taxonomical work with the fungus gnats (Mycetophilidae) belonging to the Exechia parva group. Distribution maps and gene trees.
+Taxonomical revision of fungus gnats (Mycetophilidae) belonging to the Exechia parva group. Contains, among other things, work with distribution maps and gene trees.
